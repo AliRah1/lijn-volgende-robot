@@ -1,0 +1,30 @@
+# Architectuur
+
+## Het grote plaatje
+
+Het systeem bestaat uit twee delen: de **robot** (de IoT-node) en de
+**Raspberry Pi** (de server). Ze communiceren met elkaar over WiFi via MQTT.
+[Robot / ESP32]  --WiFi/MQTT-->  [Raspberry Pi]
+
+sensoren                       - Mosquitto (broker)
+motoren                        - InfluxDB (database)
+state machine                  - Grafana (dashboard)
+## Dataflow
+
+1. De **ESP32** leest de sensoren uit (afstand via HC-SR04, lijn via TCRT5000).
+2. Op basis daarvan beslist de **state machine** wat de robot doet en stuurt
+   ze de motoren aan via de L298N.
+3. De ESP32 stuurt de sensorwaarden via **MQTT** naar de broker op de Raspberry Pi.
+4. **Mosquitto** ontvangt de berichten en geeft ze door.
+5. De data wordt opgeslagen in **InfluxDB**.
+6. **Grafana** leest InfluxDB uit en toont de data live in een dashboard.
+
+## Waarom deze opzet
+
+We kozen voor een scheiding tussen de robot (die enkel rijdt en data stuurt)
+en de Raspberry Pi (die opslaat en visualiseert). Zo blijft de firmware op de
+ESP32 eenvoudig en wordt al het zware werk — opslag en visualisatie — door de
+server gedaan.
+
+> Voeg hier een schema-tekening toe (zie `images/`) en verwijs ernaar, bv.:
+> ![Architectuurschema](../images/architectuur.png)
