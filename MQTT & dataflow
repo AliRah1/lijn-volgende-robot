@@ -1,0 +1,42 @@
+# MQTT & dataflow
+
+## Wat is MQTT
+
+MQTT is een lichtgewicht berichtenprotocol gebaseerd op **publish/subscribe**.
+Een apparaat publiceert berichten naar een "topic", en wie geïnteresseerd is
+in dat topic ontvangt ze. Een centrale **broker** (Mosquitto) regelt dit.
+
+## Waarom MQTT en niet REST
+
+We kozen MQTT boven REST omdat:
+
+- MQTT lichtgewicht is en weinig data verbruikt, ideaal voor een microcontroller;
+- het publish/subscribe-model perfect past bij continue stromen sensordata;
+- de robot data kan blijven sturen zonder telkens een volledige
+  HTTP-aanvraag op te zetten.
+
+## De topics
+
+De ESP32 publiceert naar topics zoals:
+
+- `robot/afstand` — de gemeten afstand van de HC-SR04
+- `robot/lijn` — de status van de lijnsensoren
+- `robot/status` — de huidige toestand van de state machine
+
+> Pas de topicnamen aan naar wat je echt gebruikt hebt.
+
+## Opslag in InfluxDB
+
+De data wordt opgeslagen in **InfluxDB**, een database speciaal gemaakt voor
+**time-series data** (metingen in de tijd).
+**Waarom InfluxDB en niet SQL:** sensordata is in essentie een stroom van
+waarden met tijdstempels. InfluxDB is daarvoor geoptimaliseerd, terwijl een
+klassieke SQL-database hiervoor minder geschikt en trager is.
+
+## Visualisatie in Grafana
+
+**Grafana** leest InfluxDB uit en toont de data in een live dashboard met
+grafieken. Zo zie je in realtime wat de robot meet.
+
+> Voeg hier een screenshot van je dashboard toe:
+> ![Grafana-dashboard](../images/dashboard.png)
