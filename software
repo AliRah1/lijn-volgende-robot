@@ -1,0 +1,44 @@
+# 5. Software
+
+## Overzicht
+
+De firmware draait op de ESP32 en is geschreven in C++ (Arduino-framework).
+Ze leest de sensoren, beslist wat de robot doet en stuurt de motoren aan.
+
+## State machine
+
+Het hart van de software is een **state machine met zeven toestanden**. In
+plaats van één grote lus met veel `if`-statements bepaalt de state machine
+duidelijk in welke toestand de robot zich bevindt en wat hij daar doet.
+
+De toestanden:
+
+1. [Toestand 1 — bv. opstarten / init]
+2. [Toestand 2 — bv. lijn zoeken]
+3. [Toestand 3 — bv. lijn volgen]
+4. [Toestand 4 — bv. obstakel gedetecteerd]
+5. [Toestand 5 — bv. stoppen]
+6. [Toestand 6 — bv. bocht nemen]
+7. [Toestand 7 — bv. data versturen]
+
+> Pas de namen aan naar je eigen toestanden. Voeg eventueel een
+> toestandsdiagram toe in `images/`.
+
+**Waarom een state machine:** het maakt het gedrag overzichtelijk,
+voorspelbaar en makkelijk uit te breiden. Een nieuwe toestand toevoegen kan
+zonder de rest om te gooien.
+
+## Technologiekeuzes
+
+- **ESP32 boven Arduino Uno:** ingebouwde WiFi en meer geheugen.
+- **C++ (Arduino-framework):** brede ondersteuning en veel bibliotheken voor
+  de sensoren en MQTT.
+
+## Bibliotheken
+
+[Lijst hier de bibliotheken die je gebruikte, bv. PubSubClient voor MQTT,
+WiFi.h, enz.]
+
+## Bestanden
+
+De firmware staat in de map [`firmware/`](../firmware/).
