@@ -1,0 +1,34 @@
+# 4. Hardware & PCB
+
+## Van breadboard naar PCB
+
+We zijn begonnen met een breadboard om de schakeling te testen. Toen alles
+werkte, hebben we een eigen PCB ontworpen.
+**Waarom een eigen PCB:** een breadboard heeft losse draadjes die snel
+loskomen, wat onbetrouwbaar is bij een rijdende robot met trillingen. Een PCB
+is steviger, compacter en professioneler.
+
+## Het ontwerp
+
+De PCB verbindt alle componenten: de ESP32, de L298N-motordriver, de
+LM2590-spanningsregelaar en de aansluitingen voor de sensoren en motoren.
+Het schema en het bordontwerp zijn gemaakt in [vul je tool in, bv. KiCad /
+EasyEDA].
+
+> Voeg hier het schema en het PCB-ontwerp toe:
+> ![PCB-schema](../images/pcb-schema.png)
+
+## Productie via JLCPCB
+
+De printplaat is besteld en geproduceerd via **JLCPCB**. We hebben de
+ontwerpbestanden (gerber-bestanden) geëxporteerd en geüpload, waarna de
+fabrikant de fysieke print maakte.
+
+## Voeding
+
+De LM2590 zet de batterijspanning om naar een stabiele spanning voor de
+elektronica. Dit beschermt de componenten tegen schommelingen in de voeding.
+
+## Bestanden
+
+De ontwerpbestanden en gerber-bestanden staan in de map [`hardware/`](../hardware/).
