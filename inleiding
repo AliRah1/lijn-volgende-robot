@@ -1,0 +1,30 @@
+# 1. Inleiding
+
+## Probleemstelling
+
+Voor dit eindwerk wilden we een robot bouwen die zelfstandig een parcours kan
+afleggen zonder menselijke besturing, en waarvan de werking op afstand
+opgevolgd kan worden. Dit combineert twee kerndomeinen van IoT: embedded
+besturing van hardware en het verzamelen en visualiseren van sensordata.
+
+## Doelstelling
+
+Het doel is een autonoom rijdende robot te ontwerpen en te bouwen die:
+
+- een lijn volgt via IR-sensoren;
+- obstakels detecteert en daarop reageert;
+- zijn sensordata in realtime doorstuurt naar een dashboard;
+- volledig draait op een zelf ontworpen PCB.
+
+## Scope
+
+- **Wel:** hardware-ontwerp, eigen PCB, firmware voor de ESP32,
+  MQTT-communicatie en een Grafana-dashboard.
+- **Niet:** beeldherkenning via een camera en een mobiele app. Deze vielen
+  buiten de tijd en de scope van het project.
+
+## Leeswijzer
+
+Dit document doorloopt eerst de componenten, daarna de architectuur, het
+hardware-ontwerp, de software en ten slotte het testen en de problemen die
+we tegenkwamen.
