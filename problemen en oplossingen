@@ -1,0 +1,30 @@
+# Problemen & oplossingen
+
+Een eerlijk overzicht van de problemen die we tegenkwamen en hoe we ze
+oplosten. Deze tegenslagen waren een belangrijk deel van het leerproces.
+
+## Verkeerde L298N-variant besteld
+
+**Probleem:** bij de eerste bestelling kozen we de verkeerde variant van de
+L298N-motordriver, wat niet paste in ons ontwerp en vertraging opleverde.
+**Oplossing:** de juiste variant nabesteld.
+**Les:** datasheets en footprints grondig controleren vóór het bestellen.
+
+## Ontbrekende diodes
+
+**Probleem:** tijdens het testen bleek dat er diodes ontbraken in het ontwerp.
+Deze zijn nodig om de motoren correct en veilig te laten werken
+(bescherming tegen terugstroom van de motoren).
+**Oplossing:** de diodes toegevoegd.
+**Les:** het schema strenger reviewen vóór de productie van de PCB.
+
+## MQTT zonder beveiliging
+
+**Probleem:** de MQTT-broker draaide zonder authenticatie of versleuteling.
+Dit was aanvaardbaar in een afgeschermd lokaal netwerk, maar niet veilig voor
+een productieomgeving.
+**Oplossing / aanbeveling:** in een volgende versie authenticatie en TLS
+toevoegen aan de broker.
+**Les:** beveiliging vanaf het begin meenemen, niet pas achteraf.
+
+> Voeg hier extra problemen toe die jullie zijn tegengekomen.
