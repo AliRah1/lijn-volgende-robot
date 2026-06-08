@@ -1,0 +1,43 @@
+#Componenten
+
+Hieronder de hardware die we gebruikten, met per stuk de functie en de reden
+van de keuze.
+
+## ESP32 DevKit V1
+De microcontroller en het brein van de robot. Verwerkt de sensordata, stuurt
+de motoren aan en verzorgt de WiFi-communicatie.
+**Waarom:** gekozen boven de Arduino Uno omdat de ESP32 ingebouwde WiFi heeft
+en meer geheugen en rekenkracht biedt.
+
+## HC-SR04 (ultrasone sensor)
+Meet de afstand tot obstakels voor de robot.
+**Waarom:** goedkoop, betrouwbaar en eenvoudig aan te sturen voor
+afstandsmeting.
+
+## TCRT5000 (IR-lijnsensoren)
+Detecteren het contrast tussen de lijn en de ondergrond, zodat de robot de
+lijn kan volgen.
+**Waarom:** standaardoplossing voor lijnvolgen, eenvoudig en goedkoop.
+
+## L298N (motordriver)
+Stuurt de twee DC-motoren aan op basis van de signalen van de ESP32. Een
+microcontroller kan zelf niet genoeg stroom leveren voor motoren; de driver
+lost dat op.
+
+## 2× DC-motor
+Drijven de wielen aan en zorgen voor de beweging en de besturing van de robot.
+
+## LM2590 (spanningsregelaar)
+Zet de ingangsspanning van de batterij om naar een stabiele spanning voor de
+elektronica.
+**Waarom:** nodig om de componenten een constante, veilige voedingsspanning
+te geven.
+
+## Raspberry Pi
+Draait de MQTT-broker, de database en het dashboard. Vormt de serverkant van
+het systeem.
+
+## Eigen PCB
+Een zelf ontworpen printplaat die alle componenten verbindt.
+**Waarom:** gekozen boven een breadboard omdat een PCB betrouwbaarder,
+compacter en professioneler is.
