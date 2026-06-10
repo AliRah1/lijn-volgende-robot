@@ -1,8 +1,19 @@
 /*
  * ============================================================
  *  Mercedes-Benz Museum Robot
- *  ESP32 DevKit V1 — Volledige code
- *  Functies: Lijnvolgen, Obstakelvermijding, MQTT, LEDs, Knoppen
+ *  ESP32 DevKit V1 — VERSIE: RICHTING VOLGENS EERSTE SENSOR
+ * ============================================================
+ *
+ *  OPSTARTEN (kalibratie blijft):
+ *  Zet de robot OP DE LIJN (midden=zwart, zijkanten=wit) en
+ *  zet hem dan pas aan. 3x groen = OK, 5x rood = fout, herstart.
+ *
+ *  NIEUWE STUURLOGICA (zoals jij beschreef):
+ *  - LINKER  sensor ziet de lijn  → draai naar RECHTS
+ *  - RECHTER sensor ziet de lijn  → draai naar LINKS
+ *  - MIDDEN  ziet de lijn         → rechtdoor
+ *  Dit geldt zowel bij normaal rijden als bij het terugvinden
+ *  van de lijn na kwijtraken.
  * ============================================================
  */
 
@@ -12,28 +23,25 @@
 // ============================================================
 //  WiFi & MQTT instellingen
 // ============================================================
-const char* WIFI_SSID     = "JOUW_WIFI_NAAM";
-const char* WIFI_PASS     = "JOUW_WIFI_WACHTWOORD";
-const char* MQTT_SERVER   = "192.168.1.XXX";   // IP van Raspberry Pi
+const char* WIFI_SSID     = "embed";
+const char* WIFI_PASS     = "weareincontrol";
+const char* MQTT_SERVER   = "192.168.1.100";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_CLIENT   = "robot_1";
 
-// MQTT Topics
 const char* TOPIC_STATUS    = "mercedes/robot1/status";
 const char* TOPIC_AFSTAND   = "mercedes/robot1/afstand";
 const char* TOPIC_BATTERIJ  = "mercedes/robot1/batterij";
 const char* TOPIC_FOUT      = "mercedes/robot1/fout";
-const char* TOPIC_COMMANDO  = "mercedes/robot1/commando";  // ontvangen
+const char* TOPIC_COMMANDO  = "mercedes/robot1/commando";
 
 // ============================================================
 //  PIN DEFINITIES
 // ============================================================
-// IR Lijnvolg sensoren (TCRT5000)
-#define IR_LINKS    34
-#define IR_MIDDEN   35
-#define IR_RECHTS   32
+#define IR_LINKS    32
+#define IR_MIDDEN   34
+#define IR_RECHTS   35
 
-// HC-SR04 Ultrasone sensoren
 #define VOOR_TRIG   27
 #define VOOR_ECHO   14
 #define LINKS_TRIG  26
@@ -41,40 +49,47 @@ const char* TOPIC_COMMANDO  = "mercedes/robot1/commando";  // ontvangen
 #define RECHTS_TRIG 33
 #define RECHTS_ECHO 23
 
-// Motor L298N
-#define IN1  16
-#define IN2  17
-#define ENA  4
+#define IN1  17
+#define IN2  16
+#define ENA  2
 #define IN3  18
 #define IN4  19
 #define ENB  5
 
-// Knoppen
-#define KNOP_STOP   2
+#define KNOP_STOP   4
 #define KNOP_SKIP   13
 
-// LEDs
 #define LED_GROEN   21
 #define LED_GEEL    22
 #define LED_ROOD    15
 
+#define BATTERIJ_PIN  36
+
 // ============================================================
-//  PWM INSTELLINGEN
+//  SNELHEDEN
 // ============================================================
-#define PWM_FREQ    1000
-#define PWM_RES     8
-#define SNELHEID    160     // Rijsnelheid 0-255
-#define DRAAI_SNEL  130     // Draaisnelheid
+#define PWM_FREQ      1000
+#define PWM_RES       8
+#define SNELHEID      140   // normale rijsnelheid
+#define ZACHT_SNEL    100   // voorzichtig vooruit na herstel
+#define DRAAI_SNEL    150   // obstakel-manoeuvre
+#define BIJSTUUR_SNEL 110   // bijsturen als zijsensor de lijn ziet
+#define ZOEK_SNEL     85    // voorzichtig zoeken bij lijn kwijt
 
 // ============================================================
 //  DREMPELWAARDEN
 // ============================================================
-#define OBSTAKEL_AFSTAND    25   // cm — stop als object dichter is
-#define DWARSLIJN_TIJD      30000 // 30 seconden wachten bij dwarslijn
-#define STOP_TIJD           30000 // 30 seconden wachten bij knop stop
-#define VASTGELOPEN_TIJD    5000  // 5 seconden op zelfde plek = vastgelopen
-#define BATTERIJ_GEEL       30   // % — gele LED
-#define BATTERIJ_ROOD       10   // % — rode LED + stop
+#define OBSTAKEL_STOP       30
+#define OBSTAKEL_MAX        50
+#define DWARSLIJN_TIJD      30000
+#define STOP_TIJD           30000
+#define DWARSLIJN_LEZINGEN  3
+#define DWARSLIJN_COOLDOWN  2000
+#define ZOEK_OMSCHAKEL      2500
+#define ZACHT_DUUR          400
+#define KNOP_DEBOUNCE       50
+#define BATTERIJ_GEEL       30
+#define BATTERIJ_ROOD       10
 
 // ============================================================
 //  GLOBALE VARIABELEN
@@ -82,30 +97,97 @@ const char* TOPIC_COMMANDO  = "mercedes/robot1/commando";  // ontvangen
 WiFiClient   wifiClient;
 PubSubClient mqtt(wifiClient);
 
-// Robot toestand
 enum Toestand {
   RIJDEN,
   GESTOPT_KNOP,
   GESTOPT_COMMANDO,
   GESTOPT_BATTERIJ,
   OBSTAKEL_VERMIJDEN,
-  DWARSLIJN_WACHT,
-  VASTGELOPEN
+  DWARSLIJN_WACHT
 };
 
 Toestand toestand = RIJDEN;
 
-unsigned long stopTijd        = 0;
-unsigned long vastgelopenTijd = 0;
-unsigned long mqttTijd        = 0;
-unsigned long positieTijd     = 0;
+enum LijnModus { VOLGEN, ZOEKEN };
+LijnModus lijnModus = VOLGEN;
 
-bool remoteStop    = false;
-bool vastgelopen   = false;
-int  positieTeller = 0;
+enum ObstakelFase { OBST_KIJK, OBST_DRAAI1, OBST_VOORUIT, OBST_DRAAI2 };
+ObstakelFase obstFase = OBST_KIJK;
+unsigned long obstFaseStart = 0;
+bool obstNaarLinks = true;
+
+unsigned long stopTijd          = 0;
+unsigned long mqttTijd          = 0;
+unsigned long mqttReconnectTijd = 0;
+unsigned long sonarTijd         = 0;
+unsigned long printTijd         = 0;
+unsigned long dwarslijnNegeren  = 0;
+unsigned long zoekStart         = 0;
+unsigned long zachtStart        = 0;
+
+bool zachtRijden       = false;
+int  dwarslijnTeller   = 0;
+int  obstakelTeller    = 0;
+int  batterijKritiekTeller = 0;
+
+bool knopStopVorig = HIGH;
+bool knopSkipVorig = HIGH;
+unsigned long knopStopTijd = 0;
+unsigned long knopSkipTijd = 0;
+
+// Welke sensor zag de lijn het laatst: -1 = links, +1 = rechts, 0 = midden
+int laatsteSensor = 0;
 
 // ============================================================
-//  WIFI & MQTT FUNCTIES
+//  AUTO-GEKALIBREERDE SENSORWAARDEN
+// ============================================================
+int WAARDE_ZWART = HIGH;
+int WAARDE_WIT   = LOW;
+
+bool isZwart(int pin) { return digitalRead(pin) == WAARDE_ZWART; }
+
+// ============================================================
+//  KALIBRATIE — robot staat op de lijn bij het opstarten
+// ============================================================
+void kalibreerSensoren() {
+  Serial.println("Kalibreren... (midden=zwart, zijkanten=wit)");
+  delay(500);
+
+  int somM = 0, somL = 0, somR = 0;
+  for (int i = 0; i < 20; i++) {
+    somM += digitalRead(IR_MIDDEN);
+    somL += digitalRead(IR_LINKS);
+    somR += digitalRead(IR_RECHTS);
+    delay(10);
+  }
+  int midden  = (somM >= 10) ? HIGH : LOW;
+  int zijkant = ((somL + somR) >= 20) ? HIGH : LOW;
+
+  if (midden == zijkant) {
+    Serial.println("KALIBRATIE MISLUKT! Robot stond niet goed op de lijn.");
+    Serial.println("Standaard gebruikt: ZWART=HIGH. Herstart op de lijn!");
+    WAARDE_ZWART = HIGH;
+    WAARDE_WIT   = LOW;
+    for (int i = 0; i < 5; i++) {
+      zetLeds(false, false, true); delay(200);
+      zetLeds(false, false, false); delay(200);
+    }
+  } else {
+    WAARDE_ZWART = midden;
+    WAARDE_WIT   = zijkant;
+    Serial.printf("Kalibratie OK: ZWART=%s, WIT=%s\n",
+                  WAARDE_ZWART == HIGH ? "HIGH" : "LOW",
+                  WAARDE_WIT   == HIGH ? "HIGH" : "LOW");
+    for (int i = 0; i < 3; i++) {
+      zetLeds(true, false, false); delay(150);
+      zetLeds(false, false, false); delay(150);
+    }
+  }
+  zetLeds(true, false, false);
+}
+
+// ============================================================
+//  WIFI & MQTT
 // ============================================================
 void verbindWifi() {
   Serial.print("WiFi verbinden...");
@@ -125,25 +207,26 @@ void verbindWifi() {
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String bericht = "";
-  for (int i = 0; i < length; i++) bericht += (char)payload[i];
+  for (unsigned int i = 0; i < length; i++) bericht += (char)payload[i];
   Serial.println("MQTT ontvangen: " + bericht);
 
   if (bericht == "STOP") {
-    remoteStop = true;
     toestand = GESTOPT_COMMANDO;
     stopMotoren();
-    mqtt.publish(TOPIC_STATUS, "GESTOPT_COMMANDO");
+    publiceer(TOPIC_STATUS, "GESTOPT_COMMANDO");
   }
   if (bericht == "START") {
-    remoteStop = false;
     toestand = RIJDEN;
-    mqtt.publish(TOPIC_STATUS, "RIJDEN");
+    lijnModus = VOLGEN;
+    publiceer(TOPIC_STATUS, "RIJDEN");
   }
 }
 
 void verbindMqtt() {
   if (WiFi.status() != WL_CONNECTED) return;
   if (mqtt.connected()) return;
+  if (millis() - mqttReconnectTijd < 5000) return;
+  mqttReconnectTijd = millis();
 
   Serial.print("MQTT verbinden...");
   if (mqtt.connect(MQTT_CLIENT)) {
@@ -155,18 +238,22 @@ void verbindMqtt() {
   }
 }
 
+void publiceer(const char* topic, const char* bericht) {
+  if (mqtt.connected()) mqtt.publish(topic, bericht);
+}
+
 // ============================================================
 //  MOTOR FUNCTIES
 // ============================================================
-void motorLinks(int snelheid, bool vooruit) {
-  digitalWrite(IN1, vooruit ? HIGH : LOW);
-  digitalWrite(IN2, vooruit ? LOW  : HIGH);
+void motorLinks(int snelheid, bool vooruitRichting) {
+  digitalWrite(IN1, vooruitRichting ? HIGH : LOW);
+  digitalWrite(IN2, vooruitRichting ? LOW  : HIGH);
   ledcWrite(ENA, snelheid);
 }
 
-void motorRechts(int snelheid, bool vooruit) {
-  digitalWrite(IN3, vooruit ? HIGH : LOW);
-  digitalWrite(IN4, vooruit ? LOW  : HIGH);
+void motorRechts(int snelheid, bool vooruitRichting) {
+  digitalWrite(IN3, vooruitRichting ? HIGH : LOW);
+  digitalWrite(IN4, vooruitRichting ? LOW  : HIGH);
   ledcWrite(ENB, snelheid);
 }
 
@@ -177,13 +264,17 @@ void stopMotoren() {
   digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
 }
 
-void vooruit()    { motorLinks(SNELHEID, true);  motorRechts(SNELHEID, true);  }
-void achteruit()  { motorLinks(SNELHEID, false); motorRechts(SNELHEID, false); }
-void draaiLinks() { motorLinks(DRAAI_SNEL, false); motorRechts(DRAAI_SNEL, true);  }
-void draaiRechts(){ motorLinks(DRAAI_SNEL, true);  motorRechts(DRAAI_SNEL, false); }
+void vooruit()      { motorLinks(SNELHEID, true);   motorRechts(SNELHEID, true);  }
+void zachtVooruit() { motorLinks(ZACHT_SNEL, true); motorRechts(ZACHT_SNEL, true); }
+void achteruit()    { motorLinks(SNELHEID, false);  motorRechts(SNELHEID, false); }
 
-void corrigeerLinks()  { motorLinks(SNELHEID/2, true); motorRechts(SNELHEID, true); }
-void corrigeerRechts() { motorLinks(SNELHEID, true); motorRechts(SNELHEID/2, true); }
+// Bijsturen tijdens het rijden (zachte bocht, blijft vooruit gaan)
+void stuurRechts() { motorLinks(SNELHEID, true);      motorRechts(BIJSTUUR_SNEL/2, true); }
+void stuurLinks()  { motorLinks(BIJSTUUR_SNEL/2, true); motorRechts(SNELHEID, true); }
+
+// Draaien op de plaats
+void draaiLinks(int snelheid)  { motorLinks(snelheid, false); motorRechts(snelheid, true);  }
+void draaiRechts(int snelheid) { motorLinks(snelheid, true);  motorRechts(snelheid, false); }
 
 // ============================================================
 //  SENSOR FUNCTIES
@@ -194,13 +285,11 @@ long meetAfstand(int trigPin, int echoPin) {
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
-  long duur = pulseIn(echoPin, HIGH, 25000);
-  if (duur == 0) return 999; // geen signaal = vrij
-  return duur * 0.034 / 2;
-}
-
-int leesIR(int pin) {
-  return digitalRead(pin); // LOW = lijn, HIGH = geen lijn
+  long duur = pulseIn(echoPin, HIGH, 30000);
+  if (duur == 0) return 999;
+  long afstand = duur * 0.034 / 2;
+  if (afstand > OBSTAKEL_MAX) return 999;
+  return afstand;
 }
 
 // ============================================================
@@ -218,91 +307,240 @@ void updateLedBatterij(int percentage) {
   else                                  zetLeds(true,  false, false);
 }
 
-// Simuleer batterij via ADC (pas pin aan indien nodig)
+// ============================================================
+//  BATTERIJ METING
+// ============================================================
 int leesBatterij() {
-  // Pas aan voor jouw batterij meetcircuit
-  // int raw = analogRead(36); // VP pin
-  // return map(raw, 0, 4095, 0, 100);
-  return 85; // tijdelijk vast voor testing
+  long som = 0;
+  for (int i = 0; i < 10; i++) som += analogRead(BATTERIJ_PIN);
+  int raw = som / 10;
+  int percentage = map(raw, 1500, 3100, 0, 100);
+  return constrain(percentage, 0, 100);
 }
 
 // ============================================================
-//  LIJNVOLGEN LOGICA
+//  LIJNVOLGEN — RICHTING VOLGENS EERSTE SENSOR
+//
+//  LINKS  ziet lijn → naar RECHTS sturen
+//  RECHTS ziet lijn → naar LINKS sturen
+//  MIDDEN ziet lijn → rechtdoor
+//  Niets ziet lijn  → voorzichtig draaien in de richting die
+//                     bij de laatst geziene sensor hoort
 // ============================================================
 void volgLijn() {
-  int l = leesIR(IR_LINKS);
-  int m = leesIR(IR_MIDDEN);
-  int r = leesIR(IR_RECHTS);
+  bool l = isZwart(IR_LINKS);
+  bool m = isZwart(IR_MIDDEN);
+  bool r = isZwart(IR_RECHTS);
 
-  // Alle 3 op lijn = dwarslijn → stop 30 seconden
-  if (l == LOW && m == LOW && r == LOW) {
-    stopMotoren();
-    Serial.println("Dwarslijn gedetecteerd! Wacht 30s...");
-    mqtt.publish(TOPIC_STATUS, "DWARSLIJN");
-    toestand = DWARSLIJN_WACHT;
-    stopTijd = millis();
+  if (millis() - printTijd > 200) {
+    printTijd = millis();
+    Serial.printf("IR zwart? L=%d M=%d R=%d | modus=%d | laatste=%d\n",
+                  l, m, r, lijnModus, laatsteSensor);
+  }
+
+  // ---------- DWARSLIJN: alle 3 zwart ----------
+  if (l && m && r) {
+    if (millis() < dwarslijnNegeren) { vooruit(); return; }
+    dwarslijnTeller++;
+    if (dwarslijnTeller >= DWARSLIJN_LEZINGEN) {
+      stopMotoren();
+      Serial.println("Dwarslijn! Wacht 30s...");
+      publiceer(TOPIC_STATUS, "DWARSLIJN");
+      toestand = DWARSLIJN_WACHT;
+      stopTijd = millis();
+      dwarslijnTeller = 0;
+      lijnModus = VOLGEN;
+    } else {
+      vooruit();
+    }
+    return;
+  }
+  dwarslijnTeller = 0;
+
+  // ============================================================
+  //  MODUS: ZOEKEN — lijn was kwijt
+  // ============================================================
+  if (lijnModus == ZOEKEN) {
+
+    // Een sensor heeft de lijn weer → direct overschakelen
+    if (l || m || r) {
+      stopMotoren();
+      delay(30);                 // korte rem, niet voorbij draaien
+      lijnModus = VOLGEN;
+      zachtRijden = true;        // voorzichtig weer oppakken
+      zachtStart = millis();
+      Serial.println("Lijn teruggevonden -> voorzichtig verder");
+      // GEEN return: meteen hieronder de juiste stuurkeuze maken
+    } else {
+      // Nog niets → voorzichtig draaien volgens de laatst geziene sensor
+      // laatste was LINKS  → wij sturen RECHTS, dus ook rechts zoeken
+      // laatste was RECHTS → wij sturen LINKS, dus ook links zoeken
+      unsigned long zoekDuur = millis() - zoekStart;
+      if (zoekDuur < ZOEK_OMSCHAKEL) {
+        if (laatsteSensor == -1)      draaiRechts(ZOEK_SNEL);
+        else if (laatsteSensor == 1)  draaiLinks(ZOEK_SNEL);
+        else                          zachtVooruit();   // midden was laatst → rustig door
+      } else if (zoekDuur < 3 * ZOEK_OMSCHAKEL) {
+        // Niet gevonden → andere kant proberen
+        if (laatsteSensor == -1)      draaiLinks(ZOEK_SNEL);
+        else                          draaiRechts(ZOEK_SNEL);
+      } else {
+        zoekStart = millis();
+      }
+      return;
+    }
+  }
+
+  // ============================================================
+  //  MODUS: VOLGEN — jouw stuurregels
+  // ============================================================
+
+  // Lijn helemaal kwijt → zoekmodus
+  if (!l && !m && !r) {
+    lijnModus = ZOEKEN;
+    zoekStart = millis();
     return;
   }
 
-  // Lijn volgen
-  if      (m == LOW && l == HIGH && r == HIGH) vooruit();           // Midden → rechtdoor
-  else if (l == LOW && m == HIGH)               corrigeerLinks();    // Links → naar links
-  else if (r == LOW && m == HIGH)               corrigeerRechts();   // Rechts → naar rechts
-  else if (l == LOW && m == LOW)                corrigeerLinks();    // Links + midden
-  else if (r == LOW && m == LOW)                corrigeerRechts();   // Rechts + midden
-  else                                          vooruit();           // Geen lijn → rechtdoor
-}
+  // Na herstel even voorzichtig rijden
+  bool zacht = zachtRijden && (millis() - zachtStart < ZACHT_DUUR);
+  if (zachtRijden && !zacht) zachtRijden = false;
 
-// ============================================================
-//  OBSTAKELVERMIJDING
-// ============================================================
-void vermijdObstakel() {
-  Serial.println("Obstakel! Vermijden...");
-  mqtt.publish(TOPIC_STATUS, "OBSTAKEL_VERMIJDEN");
-
-  stopMotoren(); delay(300);
-
-  // Kijk links en rechts
-  long afstandLinks  = meetAfstand(LINKS_TRIG,  LINKS_ECHO);
-  long afstandRechts = meetAfstand(RECHTS_TRIG, RECHTS_ECHO);
-
-  if (afstandLinks > afstandRechts) {
-    // Meer ruimte links → draai links
-    draaiLinks(); delay(600);
-    vooruit();    delay(800);
-    draaiRechts();delay(600);
-  } else {
-    // Meer ruimte rechts → draai rechts
-    draaiRechts();delay(600);
-    vooruit();    delay(800);
-    draaiLinks(); delay(600);
+  // MIDDEN ziet de lijn → rechtdoor
+  if (m && !l && !r) {
+    laatsteSensor = 0;
+    if (zacht) zachtVooruit(); else vooruit();
+    return;
   }
 
-  toestand = RIJDEN;
-  mqtt.publish(TOPIC_STATUS, "RIJDEN");
-}
-
-// ============================================================
-//  VASTGELOPEN DETECTIE
-// ============================================================
-void checkVastgelopen() {
-  // Eenvoudige check: teller verhogen als motoren aan zijn maar lijn niet gevonden
-  // Uitbreidbaar met encoder feedback
-  if (millis() - vastgelopenTijd > VASTGELOPEN_TIJD) {
-    Serial.println("Mogelijk vastgelopen!");
-    mqtt.publish(TOPIC_FOUT, "VASTGELOPEN");
-    toestand = VASTGELOPEN;
-    vastgelopenTijd = millis();
+  // LINKER sensor ziet de lijn → naar RECHTS sturen
+  if (l && !m) {
+    laatsteSensor = -1;
+    stuurRechts();
+    return;
   }
+
+  // RECHTER sensor ziet de lijn → naar LINKS sturen
+  if (r && !m) {
+    laatsteSensor = 1;
+    stuurLinks();
+    return;
+  }
+
+  // Midden + links → licht naar rechts blijven sturen
+  if (m && l) {
+    laatsteSensor = -1;
+    stuurRechts();
+    return;
+  }
+
+  // Midden + rechts → licht naar links blijven sturen
+  if (m && r) {
+    laatsteSensor = 1;
+    stuurLinks();
+    return;
+  }
+
+  if (zacht) zachtVooruit(); else vooruit();
 }
 
-void herstelVastgelopen() {
-  Serial.println("Herstel: achteruit rijden...");
-  achteruit(); delay(1000);
-  draaiLinks(); delay(800);
+// ============================================================
+//  OBSTAKELVERMIJDING — niet-blokkerend
+// ============================================================
+void startObstakelManoeuvre() {
   stopMotoren();
-  toestand = RIJDEN;
-  vastgelopenTijd = millis();
+  obstFase = OBST_KIJK;
+  obstFaseStart = millis();
+  toestand = OBSTAKEL_VERMIJDEN;
+  publiceer(TOPIC_STATUS, "OBSTAKEL_VERMIJDEN");
+  Serial.println("Obstakel! Manoeuvre starten...");
+}
+
+void doeObstakelStap() {
+  switch (obstFase) {
+
+    case OBST_KIJK:
+      if (millis() - obstFaseStart >= 300) {
+        long aL = meetAfstand(LINKS_TRIG,  LINKS_ECHO);
+        long aR = meetAfstand(RECHTS_TRIG, RECHTS_ECHO);
+        obstNaarLinks = (aL > aR);
+        Serial.printf("Links: %ld Rechts: %ld -> %s\n",
+                      aL, aR, obstNaarLinks ? "LINKS" : "RECHTS");
+        if (obstNaarLinks) draaiLinks(DRAAI_SNEL); else draaiRechts(DRAAI_SNEL);
+        obstFase = OBST_DRAAI1;
+        obstFaseStart = millis();
+      }
+      break;
+
+    case OBST_DRAAI1:
+      if (millis() - obstFaseStart >= 600) {
+        vooruit();
+        obstFase = OBST_VOORUIT;
+        obstFaseStart = millis();
+      }
+      break;
+
+    case OBST_VOORUIT:
+      if (millis() - sonarTijd > 100) {
+        sonarTijd = millis();
+        if (meetAfstand(VOOR_TRIG, VOOR_ECHO) < OBSTAKEL_STOP) {
+          startObstakelManoeuvre();
+          return;
+        }
+      }
+      if (millis() - obstFaseStart >= 800) {
+        if (obstNaarLinks) draaiRechts(DRAAI_SNEL); else draaiLinks(DRAAI_SNEL);
+        obstFase = OBST_DRAAI2;
+        obstFaseStart = millis();
+      }
+      break;
+
+    case OBST_DRAAI2:
+      if (millis() - obstFaseStart >= 600) {
+        lijnModus = ZOEKEN;
+        zoekStart = millis();
+        toestand = RIJDEN;
+        publiceer(TOPIC_STATUS, "RIJDEN");
+        Serial.println("Manoeuvre klaar, lijn zoeken...");
+      }
+      break;
+  }
+}
+
+// ============================================================
+//  KNOPPEN — niet-blokkerend
+// ============================================================
+void checkKnoppen() {
+  bool stopNu = digitalRead(KNOP_STOP);
+  if (stopNu == LOW && knopStopVorig == HIGH &&
+      millis() - knopStopTijd > KNOP_DEBOUNCE) {
+    knopStopTijd = millis();
+    if (toestand == GESTOPT_KNOP) {
+      toestand = RIJDEN;
+      lijnModus = VOLGEN;
+      publiceer(TOPIC_STATUS, "RIJDEN");
+      Serial.println("Verder rijden via knop");
+    } else {
+      stopMotoren();
+      toestand = GESTOPT_KNOP;
+      stopTijd = millis();
+      publiceer(TOPIC_STATUS, "GESTOPT_KNOP");
+      Serial.println("STOP knop ingedrukt");
+    }
+  }
+  knopStopVorig = stopNu;
+
+  bool skipNu = digitalRead(KNOP_SKIP);
+  if (skipNu == LOW && knopSkipVorig == HIGH &&
+      millis() - knopSkipTijd > KNOP_DEBOUNCE) {
+    knopSkipTijd = millis();
+    toestand = RIJDEN;
+    lijnModus = VOLGEN;
+    dwarslijnNegeren = millis() + DWARSLIJN_COOLDOWN;
+    publiceer(TOPIC_STATUS, "SKIP");
+    Serial.println("SKIP knop ingedrukt");
+  }
+  knopSkipVorig = skipNu;
 }
 
 // ============================================================
@@ -312,13 +550,11 @@ void setup() {
   Serial.begin(115200);
   Serial.println("=== Mercedes Robot opstarten ===");
 
-  // Motor pinnen
   pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
   ledcAttach(ENA, PWM_FREQ, PWM_RES);
   ledcAttach(ENB, PWM_FREQ, PWM_RES);
 
-  // Sensor pinnen
   pinMode(VOOR_TRIG,   OUTPUT); pinMode(VOOR_ECHO,   INPUT);
   pinMode(LINKS_TRIG,  OUTPUT); pinMode(LINKS_ECHO,  INPUT);
   pinMode(RECHTS_TRIG, OUTPUT); pinMode(RECHTS_ECHO, INPUT);
@@ -326,17 +562,16 @@ void setup() {
   pinMode(IR_MIDDEN,   INPUT);
   pinMode(IR_RECHTS,   INPUT);
 
-  // Knoppen (interne pull-up)
   pinMode(KNOP_STOP, INPUT_PULLUP);
   pinMode(KNOP_SKIP, INPUT_PULLUP);
 
-  // LEDs
   pinMode(LED_GROEN, OUTPUT);
   pinMode(LED_GEEL,  OUTPUT);
   pinMode(LED_ROOD,  OUTPUT);
-  zetLeds(true, false, false); // Start groen
 
-  // WiFi & MQTT
+  // *** KALIBRATIE: robot moet OP DE LIJN staan! ***
+  kalibreerSensoren();
+
   verbindWifi();
   mqtt.setServer(MQTT_SERVER, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
@@ -350,76 +585,53 @@ void setup() {
 //  HOOFDLOOP
 // ============================================================
 void loop() {
-  // MQTT verbinding behouden
   if (!mqtt.connected()) verbindMqtt();
   mqtt.loop();
 
-  // Batterij check (elke 5 seconden)
+  checkKnoppen();
+
+  // Telemetrie elke 5 seconden
   if (millis() - mqttTijd > 5000) {
     mqttTijd = millis();
     int batt = leesBatterij();
-    mqtt.publish(TOPIC_BATTERIJ, String(batt).c_str());
+    publiceer(TOPIC_BATTERIJ, String(batt).c_str());
     updateLedBatterij(batt);
 
-    // Afstanden publiceren
     long voor   = meetAfstand(VOOR_TRIG,   VOOR_ECHO);
     long links  = meetAfstand(LINKS_TRIG,  LINKS_ECHO);
     long rechts = meetAfstand(RECHTS_TRIG, RECHTS_ECHO);
     String afstanden = "voor:" + String(voor) + ",links:" + String(links) + ",rechts:" + String(rechts);
-    mqtt.publish(TOPIC_AFSTAND, afstanden.c_str());
+    publiceer(TOPIC_AFSTAND, afstanden.c_str());
 
-    // Batterij kritiek → stop
-    if (batt <= BATTERIJ_ROOD && toestand == RIJDEN) {
-      stopMotoren();
-      toestand = GESTOPT_BATTERIJ;
-      mqtt.publish(TOPIC_FOUT, "BATTERIJ_KRITIEK");
-      Serial.println("Batterij kritiek! Robot gestopt.");
-    }
-  }
-
-  // Knop STOP check
-  if (digitalRead(KNOP_STOP) == LOW) {
-    delay(50); // debounce
-    if (digitalRead(KNOP_STOP) == LOW) {
-      if (toestand == RIJDEN) {
+    if (batt <= BATTERIJ_ROOD) {
+      batterijKritiekTeller++;
+      if (batterijKritiekTeller >= 3 && toestand == RIJDEN) {
         stopMotoren();
-        toestand = GESTOPT_KNOP;
-        stopTijd = millis();
-        mqtt.publish(TOPIC_STATUS, "GESTOPT_KNOP");
-        Serial.println("STOP knop ingedrukt");
-      } else if (toestand == GESTOPT_KNOP) {
-        // Nieuwe druk → verder rijden
-        toestand = RIJDEN;
-        mqtt.publish(TOPIC_STATUS, "RIJDEN");
-        Serial.println("Verder rijden via knop");
+        toestand = GESTOPT_BATTERIJ;
+        publiceer(TOPIC_FOUT, "BATTERIJ_KRITIEK");
+        Serial.println("Batterij kritiek! Robot gestopt.");
       }
-      while (digitalRead(KNOP_STOP) == LOW) delay(10); // wacht loslaten
+    } else {
+      batterijKritiekTeller = 0;
     }
   }
 
-  // Knop SKIP check
-  if (digitalRead(KNOP_SKIP) == LOW) {
-    delay(50);
-    if (digitalRead(KNOP_SKIP) == LOW) {
-      toestand = RIJDEN;
-      mqtt.publish(TOPIC_STATUS, "SKIP");
-      Serial.println("SKIP knop ingedrukt");
-      while (digitalRead(KNOP_SKIP) == LOW) delay(10);
-    }
-  }
-
-  // ============================================================
-  //  TOESTAND MACHINE
-  // ============================================================
   switch (toestand) {
 
     case RIJDEN: {
-      // Obstakel check (voor)
-      long voorAfstand = meetAfstand(VOOR_TRIG, VOOR_ECHO);
-      if (voorAfstand < OBSTAKEL_AFSTAND) {
-        stopMotoren();
-        toestand = OBSTAKEL_VERMIJDEN;
-        break;
+      if (millis() - sonarTijd > 100) {
+        sonarTijd = millis();
+        long voorAfstand = meetAfstand(VOOR_TRIG, VOOR_ECHO);
+        if (voorAfstand < OBSTAKEL_STOP) {
+          obstakelTeller++;
+          if (obstakelTeller >= 2) {
+            obstakelTeller = 0;
+            startObstakelManoeuvre();
+            break;
+          }
+        } else {
+          obstakelTeller = 0;
+        }
       }
       volgLijn();
       break;
@@ -427,11 +639,11 @@ void loop() {
 
     case GESTOPT_KNOP:
       stopMotoren();
-      zetLeds(false, true, false); // Geel knipperen
-      // Na 30 seconden automatisch verder
+      zetLeds(false, true, false);
       if (millis() - stopTijd > STOP_TIJD) {
         toestand = RIJDEN;
-        mqtt.publish(TOPIC_STATUS, "RIJDEN");
+        lijnModus = VOLGEN;
+        publiceer(TOPIC_STATUS, "RIJDEN");
         Serial.println("30s voorbij, verder rijden");
       }
       break;
@@ -447,7 +659,7 @@ void loop() {
       break;
 
     case OBSTAKEL_VERMIJDEN:
-      vermijdObstakel();
+      doeObstakelStap();
       break;
 
     case DWARSLIJN_WACHT:
@@ -455,13 +667,11 @@ void loop() {
       zetLeds(false, true, false);
       if (millis() - stopTijd > DWARSLIJN_TIJD) {
         toestand = RIJDEN;
-        mqtt.publish(TOPIC_STATUS, "RIJDEN");
+        lijnModus = VOLGEN;
+        dwarslijnNegeren = millis() + DWARSLIJN_COOLDOWN;
+        publiceer(TOPIC_STATUS, "RIJDEN");
         Serial.println("Dwarslijn wacht voorbij, verder");
       }
-      break;
-
-    case VASTGELOPEN:
-      herstelVastgelopen();
       break;
   }
 }
